@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VIDAA Video Test</title>
+<link rel="icon" href="data:,">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #0b0f14; color: #e8eef5; font-family: Arial, Helvetica, sans-serif; }
+  body { padding: 16px 28px; font-size: 24px; line-height: 1.3; }
+  h1 { margin: 0 0 6px; font-size: 34px; }
+  .sub { color: #8fa3b8; font-size: 20px; margin-bottom: 12px; }
+  .row { display: flex; flex-wrap: wrap; margin: 0 -6px 10px; }
+  button { margin: 6px; padding: 14px 22px; font-size: 24px; color: #e8eef5; background: #1d2a38; border: 3px solid #2c3e52; border-radius: 10px; cursor: pointer; }
+  button:focus { outline: none; border-color: #ffd23f; background: #2a3b4f; box-shadow: 0 0 0 4px rgba(255,210,63,.45); }
+  #status { min-height: 34px; margin: 4px 0 10px; font-size: 26px; color: #ffd23f; }
+  #layout { display: flex; align-items: flex-start; }
+  #left { flex: 1 1 auto; min-width: 0; }
+  #stage { flex: 0 0 auto; width: 480px; margin-left: 20px; }
+  #stage video { width: 480px; height: 270px; background: #000; display: block; border: 3px solid #2c3e52; }
+  #stageinfo { font-size: 18px; color: #8fa3b8; margin-top: 6px; min-height: 48px; }
+  table { border-collapse: collapse; width: 100%; font-size: 21px; }
+  th, td { text-align: left; padding: 5px 10px; border-bottom: 1px solid #1f2d3b; vertical-align: top; }
+  th { color: #8fa3b8; font-weight: normal; font-size: 18px; }
+  .PASS { color: #3ddc84; font-weight: bold; }
+  .WARN { color: #ffb020; font-weight: bold; }
+  .FAIL { color: #ff5a5f; font-weight: bold; }
+  .INFO { color: #7fb4ff; font-weight: bold; }
+  .grp td { background: #121b25; color: #8fa3b8; font-size: 18px; letter-spacing: 1px; }
+  #verdict { margin: 14px 0; padding: 12px 16px; border-left: 6px solid #ffd23f; background: #121b25; font-size: 22px; }
+  #report { white-space: pre-wrap; font-family: Consolas, monospace; font-size: 17px; color: #b6c6d6; background: #0f1620; padding: 10px 14px; border-radius: 8px; margin-top: 12px; }
+  #modal { display: none; position: fixed; left: 0; top: 0; right: 0; bottom: 0; background: rgba(0,0,0,.88); z-index: 10; align-items: center; justify-content: center; text-align: center; }
+  #modal .box { background: #14202c; border: 3px solid #ffd23f; border-radius: 14px; padding: 28px 36px; max-width: 900px; }
+  #modal .q { font-size: 32px; margin-bottom: 18px; }
+  @media (max-width: 1100px) { #layout { display: block; } #stage { margin: 0 0 12px; } }
+  .fs-fill { position: fixed !important; left: 0; top: 0; width: 100vw !important; height: 100vh !important; z-index: 20; border: 0 !important; }
+</style>
+</head>
+<body>
+<h1>VIDAA Video Test</h1>
+<div class="sub" id="dev">загрузка…</div>
+<div class="row" id="menu">
+  <button id="bAll">▶ Все тесты</button>
+  <button id="bCaps">Возможности</button>
+  <button id="bPlay">Воспроизведение</button>
+  <button id="bMse">MSE</button>
+  <button id="bAudio">Звук</button>
+  <button id="bFs">Полный экран</button>
+  <button id="bSum">Итог</button>
+  <button id="bTbl">Таблица / Отчёт</button>
+</div>
+<div id="status">Стрелки — выбор, OK — запуск. Назад — остановить тест.</div>
+<div id="layout">
+  <div id="left">
+    <div id="verdict" style="display:none"></div>
+    <table id="tbl"><thead><tr><th style="width:90px">Итог</th><th style="width:340px">Тест</th><th>Детали</th></tr></thead><tbody id="tb"></tbody></table>
+    <div id="report" style="display:none"></div>
+  </div>
+  <div id="stage">
+    <video id="vid" playsinline preload="auto"></video>
+    <div id="stageinfo"></div>
+  </div>
+</div>
+<div id="modal"><div class="box"><div class="q" id="mq"></div><div class="row" style="justify-content:center"><button id="mYes">Да</button><button id="mNo">Нет</button></div></div></div>
+
+<script>
+(function () {
+  'use strict';
+  var D = 6; // seconds of every clip
+  var SAMPLE_FROM = 1000, SAMPLE_MS = 3500;
+  var results = [];
+  var running = false, cancel = false;
+  var vid = document.getElementById('vid');
+
+  function $(id) { return document.getElementById(id); }
+  function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;'); }
+  function setStatus(t) { $('status').textContent = t; }
+  function stageInfo(t) { $('stageinfo').textContent = t; }
+
+  // ---------- results ----------
+  function put(group, name, status, detail) {
+    for (var i = 0; i < results.length; i++) {
+      if (results[i].group === group && results[i].name === name) { results.splice(i, 1); break; }
+    }
+    results.push({ group: group, name: name, status: status, detail: detail || '' });
+    renderTable();
+  }
+  function renderTable() {
+    var order = ['Система', 'Кодеки (API)', 'Воспроизведение', 'MSE', 'Звук', 'Экран'];
+    var html = '';
+    for (var g = 0; g < order.length; g++) {
+      var rows = results.filter(function (r) { return r.group === order[g]; });
+      if (!rows.length) continue;
+      html += '<tr class="grp"><td colspan="3">' + esc(order[g].toUpperCase()) + '</td></tr>';
+      for (var i = 0; i < rows.length; i++) {
+        html += '<tr><td class="' + rows[i].status + '">' + rows[i].status + '</td><td>' + esc(rows[i].name) + '</td><td>' + esc(rows[i].detail) + '</td></tr>';
+      }
+    }
+    $('tb').innerHTML = html;
+  }
+  function find(group, name) {
+    for (var i = 0; i < results.length; i++) if (results[i].group === group && results[i].name === name) return results[i];
+    return null;
+  }
+
+  // ---------- system info ----------
+  function sysInfo() {
+    var ua = navigator.userAgent || '';
+    var model = '';
+    try { if (typeof window.Hisense_GetModelName === 'function') model = window.Hisense_GetModelName(); } catch (e) {}
+    $('dev').textContent = (model ? model + ' | ' : '') + screen.width + 'x' + screen.height + ' @' + (window.devicePixelRatio || 1) + ' | окно ' + innerWidth + 'x' + innerHeight;
+    put('Система', 'Экран', 'INFO', screen.width + 'x' + screen.height + ', DPR ' + (window.devicePixelRatio || 1) + ', окно ' + innerWidth + 'x' + innerHeight);
+    put('Система', 'Браузер', 'INFO', ua.length > 110 ? ua.slice(0, 110) + '…' : ua);
+    put('Система', 'Ресурсы', 'INFO', 'CPU ' + (navigator.hardwareConcurrency || '?') + ', RAM ' + (navigator.deviceMemory || '?') + ' ГБ' + (model ? ', модель ' + model : ''));
+  }
+
+  // ---------- capability (API) checks ----------
+  var TYPES = [
+    ['H.264 1080p (High 4.0)', 'video/mp4; codecs="avc1.640028"'],
+    ['H.264 4K (High 5.1)', 'video/mp4; codecs="avc1.640033"'],
+    ['AAC-LC', 'audio/mp4; codecs="mp4a.40.2"'],
+    ['VP9 1080p', 'video/webm; codecs="vp09.00.40.08"'],
+    ['VP9 4K', 'video/webm; codecs="vp09.00.51.08"'],
+    ['VP9 HDR 10-bit', 'video/webm; codecs="vp09.02.51.10"'],
+    ['AV1 1080p', 'video/mp4; codecs="av01.0.08M.08"'],
+    ['AV1 4K', 'video/mp4; codecs="av01.0.12M.08"'],
+    ['Opus', 'audio/webm; codecs="opus"'],
+    ['HEVC 4K', 'video/mp4; codecs="hvc1.1.6.L153.B0"']
+  ];
+  function runCaps(done) {
+    var hasMS = !!(window.MediaSource || window.WebKitMediaSource);
+    put('Кодеки (API)', 'MediaSource (MSE)', hasMS ? 'PASS' : 'FAIL', hasMS ? 'есть' : 'нет — DASH-плеер работать не будет');
+    put('Кодеки (API)', 'Fullscreen API', (document.fullscreenEnabled || document.webkitFullscreenEnabled) ? 'PASS' : 'WARN', (document.fullscreenEnabled || document.webkitFullscreenEnabled) ? 'есть' : 'нет (можно растянуть на всё окно)');
+    var MS = window.MediaSource || window.WebKitMediaSource;
+    var v = document.createElement('video');
+    for (var i = 0; i < TYPES.length; i++) {
+      var t = TYPES[i], mse = '-', cp = '';
+      try { mse = (MS && MS.isTypeSupported) ? (MS.isTypeSupported(t[1]) ? 'да' : 'нет') : 'н/д'; } catch (e) { mse = 'ошибка'; }
+      try { cp = v.canPlayType(t[1]) || 'нет'; } catch (e) { cp = 'ошибка'; }
+      put('Кодеки (API)', t[0], mse === 'да' ? 'PASS' : 'FAIL', 'MSE: ' + mse + ' | canPlayType: ' + cp);
+    }
+    // MediaCapabilities (smooth / powerEfficient), if the browser has it
+    var mc = navigator.mediaCapabilities;
+    if (!mc || !mc.decodingInfo) { put('Кодеки (API)', 'MediaCapabilities', 'INFO', 'API нет'); return done(); }
+    var cases = [
+      ['MC H.264 1080p30', 'video/mp4; codecs="avc1.640028"', 1920, 1080, 30, 8e6],
+      ['MC VP9 1080p30', 'video/webm; codecs="vp09.00.40.08"', 1920, 1080, 30, 5e6],
+      ['MC VP9 4K30', 'video/webm; codecs="vp09.00.51.08"', 3840, 2160, 30, 16e6],
+      ['MC AV1 4K30', 'video/mp4; codecs="av01.0.12M.08"', 3840, 2160, 30, 12e6]
+    ];
+    var k = 0;
+    (function next() {
+      if (k >= cases.length) return done();
+      var c = cases[k++];
+      var p;
+      try {
+        p = mc.decodingInfo({ type: 'media-source', video: { contentType: c[1], width: c[2], height: c[3], framerate: c[4], bitrate: c[5] } });
+      } catch (e) { put('Кодеки (API)', c[0], 'INFO', 'ошибка вызова'); return next(); }
+      p.then(function (r) {
+        put('Кодеки (API)', c[0], r.supported ? (r.smooth ? 'PASS' : 'WARN') : 'FAIL', 'supported=' + r.supported + ' smooth=' + r.smooth + ' powerEfficient=' + r.powerEfficient);
+        next();
+      }, function () { put('Кодеки (API)', c[0], 'INFO', 'отказ API'); next(); });
+    })();
+  }
+
+  // ---------- playback measurement ----------
+  function quality(v) {
+    if (v.getVideoPlaybackQuality) { var q = v.getVideoPlaybackQuality(); return { total: q.totalVideoFrames, dropped: q.droppedVideoFrames, corrupted: q.corruptedVideoFrames || 0 }; }
+    if (v.webkitDecodedFrameCount !== undefined) return { total: v.webkitDecodedFrameCount, dropped: v.webkitDroppedFrameCount || 0, corrupted: 0 };
+    return { total: -1, dropped: 0, corrupted: 0 };
+  }
+  function resetVideo() {
+    try { vid.pause(); } catch (e) {}
+    vid.removeAttribute('src');
+    try { vid.load(); } catch (e) {}
+    vid.onerror = vid.onplaying = vid.onwaiting = null;
+  }
+  // plays whatever is already attached to vid; cb(status, detail)
+  function measure(expW, expH, expFps, cb) {
+    var finished = false, stalls = 0, startedAt = 0, mutedFallback = false;
+    function finish(status, detail) {
+      if (finished) return; finished = true;
+      clearTimeout(tStart); clearTimeout(tSample);
+      resetVideo();
+      cb(status, detail);
+    }
+    vid.onerror = function () {
+      var e = vid.error;
+      finish('FAIL', 'ошибка воспроизведения: код ' + (e ? e.code : '?') + (e && e.message ? ' ' + e.message : ''));
+    };
+    vid.onwaiting = function () { if (startedAt) stalls++; };
+    var tSample = 0;
+    var tStart = setTimeout(function () { finish('FAIL', 'воспроизведение не началось за 12 с (декодер не принял поток)'); }, 12000);
+    vid.onplaying = function () {
+      if (startedAt) return;
+      startedAt = performance.now();
+      clearTimeout(tStart);
+      tSample = setTimeout(function () {
+        var q0 = quality(vid), t0 = performance.now(), c0 = vid.currentTime;
+        tSample = setTimeout(function () {
+          var q1 = quality(vid), t1 = performance.now(), c1 = vid.currentTime;
+          var wall = (t1 - t0) / 1000, adv = c1 - c0;
+          var frames = q1.total - q0.total, drop = q1.dropped - q0.dropped;
+          var w = vid.videoWidth, h = vid.videoHeight;
+          var fps = (q1.total >= 0 && wall > 0) ? frames / wall : -1;
+          var ratio = wall > 0 ? adv / wall : 0;
+          var snd = '';
+          if (vid.webkitAudioDecodedByteCount !== undefined) snd = ' | звук ' + (vid.webkitAudioDecodedByteCount > 0 ? 'декодируется' : 'НЕ декодируется');
+          var detail = w + 'x' + h + (fps >= 0 ? ' | fps ' + fps.toFixed(1) + '/' + expFps : '') + ' | потеряно ' + drop + (fps >= 0 ? '/' + frames : '') + ' | скорость ' + ratio.toFixed(2) + 'x | заминки ' + stalls + (mutedFallback ? ' | без звука (автозапуск)' : '') + snd;
+          var status = 'PASS';
+          if (!w || !h) status = 'FAIL';
+          else if (w < expW || h < expH) { status = 'FAIL'; detail += ' | разрешение ниже ожидаемого ' + expW + 'x' + expH; }
+          else if (ratio < 0.9 || stalls > 1 || (fps >= 0 && fps < expFps * 0.85) || (frames > 0 && drop / frames > 0.05)) status = 'WARN';
+          finish(status, detail);
+        }, SAMPLE_MS);
+      }, SAMPLE_FROM);
+    };
+    var p;
+    try { p = vid.play(); } catch (e) {}
+    if (p && p.catch) p.catch(function () {
+      mutedFallback = true; vid.muted = true;
+      try { var p2 = vid.play(); if (p2 && p2.catch) p2.catch(function () { finish('FAIL', 'play() отклонён'); }); } catch (e2) { finish('FAIL', 'play() отклонён'); }
+    });
+  }
+
+  var CLIPS = [
+    ['H.264 1080p30 + AAC', 'media/h264_1080p30.mp4', 1920, 1080, 30],
+    ['H.264 1080p60 + AAC', 'media/h264_1080p60.mp4', 1920, 1080, 60],
+    ['H.264 4K30 + AAC', 'media/h264_2160p30.mp4', 3840, 2160, 30],
+    ['VP9 1080p30 + Opus', 'media/vp9_1080p30.webm', 1920, 1080, 30],
+    ['VP9 4K30 + Opus', 'media/vp9_2160p30.webm', 3840, 2160, 30],
+    ['AV1 1080p30 + AAC', 'media/av1_1080p30.mp4', 1920, 1080, 30],
+    ['AV1 4K30 + AAC', 'media/av1_2160p30.mp4', 3840, 2160, 30]
+  ];
+  function playClip(c, cb) {
+    stageInfo(c[0] + ' …');
+    resetVideo();
+    vid.muted = false; vid.volume = 1;
+    vid.src = c[1];
+    measure(c[2], c[3], c[4], function (st, d) { put('Воспроизведение', c[0], st, d); stageInfo(c[0] + ': ' + st); cb(); });
+  }
+
+  // MSE path: fetch a fragmented file and feed SourceBuffer (how DASH players work)
+  var MSE_CASES = [
+    ['MSE H.264 1080p + AAC', 'media/v_h264_1080p30.mp4', 'video/mp4; codecs="avc1.640028"', 'media/a_aac.mp4', 'audio/mp4; codecs="mp4a.40.2"', 1920, 1080, 30],
+    ['MSE VP9 1080p + Opus', 'media/v_vp9_1080p30.webm', 'video/webm; codecs="vp09.00.40.08"', 'media/a_opus.webm', 'audio/webm; codecs="opus"', 1920, 1080, 30],
+    ['MSE VP9 4K + Opus', 'media/v_vp9_2160p30.webm', 'video/webm; codecs="vp09.00.51.08"', 'media/a_opus.webm', 'audio/webm; codecs="opus"', 3840, 2160, 30],
+    ['MSE AV1 1080p + AAC', 'media/v_av1_1080p30.mp4', 'video/mp4; codecs="av01.0.08M.08"', 'media/a_aac.mp4', 'audio/mp4; codecs="mp4a.40.2"', 1920, 1080, 30],
+    ['MSE AV1 4K + AAC', 'media/v_av1_2160p30.mp4', 'video/mp4; codecs="av01.0.12M.08"', 'media/a_aac.mp4', 'audio/mp4; codecs="mp4a.40.2"', 3840, 2160, 30]
+  ];
+  function getBuf(url, ok, bad) {
+    var x = new XMLHttpRequest(); x.open('GET', url); x.responseType = 'arraybuffer';
+    x.onerror = function () { bad('не скачался ' + url); };
+    x.onload = function () { if (x.status === 200) ok(x.response); else bad('HTTP ' + x.status + ' ' + url); };
+    x.send();
+  }
+  // MSE path like a real DASH player: separate video and audio SourceBuffers
+  function mseClip(c, cb) {
+    var MS = window.MediaSource || window.WebKitMediaSource;
+    stageInfo(c[0] + ' …');
+    if (!MS) { put('MSE', c[0], 'FAIL', 'нет MediaSource'); return cb(); }
+    var okV = false, okA = false;
+    try { okV = MS.isTypeSupported(c[2]); okA = MS.isTypeSupported(c[4]); } catch (e) {}
+    if (!okV || !okA) { put('MSE', c[0], 'FAIL', 'isTypeSupported: видео ' + okV + ', аудио ' + okA); return cb(); }
+    resetVideo();
+    var ms = new MS(), url = URL.createObjectURL(ms), done = false;
+    function end(st, d) { if (done) return; done = true; try { URL.revokeObjectURL(url); } catch (e) {} put('MSE', c[0], st, d); stageInfo(c[0] + ': ' + st); cb(); }
+    ms.addEventListener('sourceopen', function () {
+      var sbV, sbA;
+      try { sbV = ms.addSourceBuffer(c[2]); sbA = ms.addSourceBuffer(c[4]); } catch (e) { return end('FAIL', 'addSourceBuffer: ' + e.message); }
+      sbV.addEventListener('error', function () { end('FAIL', 'ошибка SourceBuffer (видео)'); });
+      sbA.addEventListener('error', function () { end('FAIL', 'ошибка SourceBuffer (аудио)'); });
+      getBuf(c[1], function (vb) {
+        getBuf(c[3], function (ab) {
+          try {
+            sbV.addEventListener('updateend', function onV() {
+              sbV.removeEventListener('updateend', onV);
+              sbA.addEventListener('updateend', function onA() {
+                sbA.removeEventListener('updateend', onA);
+                try { if (ms.readyState === 'open') ms.endOfStream(); } catch (e) {}
+                vid.muted = false;
+                measure(c[5], c[6], c[7], function (st, d) { end(st, d); });
+              });
+              sbA.appendBuffer(ab);
+            });
+            sbV.appendBuffer(vb);
+          } catch (e) { end('FAIL', 'appendBuffer: ' + e.message); }
+        }, function (m) { end('FAIL', m); });
+      }, function (m) { end('FAIL', m); });
+    });
+    vid.muted = false;
+    vid.src = url;
+    setTimeout(function () { if (!done && ms.readyState === 'closed') end('FAIL', 'sourceopen не сработал за 8 с'); }, 8000);
+  }
+
+  // ---------- queue helper ----------
+  function runList(items, fn, done) {
+    var i = 0;
+    (function next() {
+      if (cancel || i >= items.length) return done();
+      setStatus('Тест ' + (i + 1) + ' из ' + items.length + ': ' + items[i][0]);
+      fn(items[i++], function () { setTimeout(next, 300); });
+    })();
+  }
+  function busy(on) {
+    running = on; cancel = false;
+    var bs = document.querySelectorAll('#menu button');
+    for (var i = 0; i < bs.length; i++) bs[i].disabled = on;
+    if (!on) { setStatus('Готово. Стрелки — выбор, OK — запуск.'); focusFirst(); }
+  }
+  function guard(fn) { return function () { if (running) return; busy(true); fn(function () { busy(false); }); }; }
+
+  // ---------- manual checks ----------
+  var modalCb = null;
+  function ask(q, cb) {
+    $('mq').textContent = q; $('modal').style.display = 'flex'; modalCb = cb; $('mYes').focus();
+  }
+  function answer(v) { $('modal').style.display = 'none'; var cb = modalCb; modalCb = null; if (cb) cb(v); }
+  $('mYes').onclick = function () { answer(true); };
+  $('mNo').onclick = function () { answer(false); };
+
+  function audioCheck(file, name, cb) {
+    var a = new Audio(); a.src = file; a.volume = 1;
+    stageInfo('Играет сигнал: ' + name);
+    var p; try { p = a.play(); } catch (e) {}
+    function afterPlay() {
+      setTimeout(function () {
+        ask(name + ': слышны два чередующихся тона (бип-бип)?', function (yes) {
+          try { a.pause(); } catch (e) {}
+          put('Звук', name, yes === true ? 'PASS' : (yes === null ? 'WARN' : 'FAIL'), yes === true ? 'слышно' : (yes === null ? 'нет ответа' : 'не слышно'));
+          cb();
+        });
+      }, 1500);
+    }
+    if (p && p.then) p.then(afterPlay, function (e) { put('Звук', name, 'FAIL', 'play() отклонён: ' + (e && e.name)); cb(); });
+    else afterPlay();
+  }
+  function runAudio(done) { audioCheck('media/audio_aac.m4a', 'AAC (m4a)', function () { audioCheck('media/audio_opus.webm', 'Opus (webm)', done); }); }
+
+  function runFs(done) {
+    stageInfo('Полный экран…');
+    resetVideo(); vid.muted = true; vid.loop = true; vid.src = 'media/h264_1080p60.mp4';
+    var p; try { p = vid.play(); } catch (e) {}
+    setTimeout(function () {
+      var req = vid.requestFullscreen || vid.webkitRequestFullscreen || vid.webkitEnterFullscreen || vid.msRequestFullscreen;
+      var res;
+      try { if (req) res = req.call(vid); } catch (e) { put('Экран', 'requestFullscreen', 'FAIL', 'исключение: ' + e.message); }
+      setTimeout(function () {
+        var fsEl = document.fullscreenElement || document.webkitFullscreenElement || vid.webkitDisplayingFullscreen;
+        put('Экран', 'Native fullscreen', fsEl ? 'PASS' : (req ? 'WARN' : 'FAIL'), fsEl ? 'включился' : (req ? 'вызов есть, но экран не переключился' : 'метода нет'));
+        if (fsEl) { try { (document.exitFullscreen || document.webkitExitFullscreen).call(document); } catch (e) {} }
+        vid.className = 'fs-fill';
+        setStatus('Видео растянуто на весь экран. Смотрите плавность 60 fps (счётчик кадров).');
+        setTimeout(function () {
+          ask('Видео на весь экран идёт плавно, без рывков, без чёрных полос по бокам?', function (yes) {
+            vid.className = ''; vid.loop = false; resetVideo();
+            put('Экран', 'Плавность 1080p60 на весь экран', yes === true ? 'PASS' : (yes === null ? 'WARN' : 'FAIL'), yes === true ? 'плавно' : (yes === null ? 'нет ответа' : 'рывки/полосы'));
+            done();
+          });
+        }, 5000);
+      }, 900);
+    }, 800);
+  }
+
+  // ---------- summary ----------
+  function pass(g, n) { var r = find(g, n); return !!r && r.status === 'PASS'; }
+  function summary() {
+    var lines = [];
+    var mse = find('Кодеки (API)', 'MediaSource (MSE)');
+    var hasMse = mse && mse.status === 'PASS';
+    var ok1080 = pass('MSE', 'MSE H.264 1080p + AAC') || pass('MSE', 'MSE VP9 1080p + Opus');
+    var ok4kVp9 = pass('MSE', 'MSE VP9 4K + Opus');
+    var ok4kAv1 = pass('MSE', 'MSE AV1 4K + AAC');
+    var any = results.some(function (r) { return r.group === 'MSE' || r.group === 'Воспроизведение'; });
+    if (!any) lines.push('Тесты воспроизведения ещё не запускались. Нажмите «Все тесты».');
+    else {
+      lines.push(hasMse ? 'MSE: есть.' : 'MSE: НЕТ — DASH-плеер (Invidious) работать не будет.');
+      lines.push(ok1080 ? '1080p через MSE: работает.' : '1080p через MSE: не подтверждено.');
+      lines.push((ok4kVp9 || ok4kAv1) ? '4K (VP9/AV1, как у YouTube): работает.' : '4K VP9/AV1: не подтверждено (YouTube-4K не получится).');
+      if (hasMse && ok1080) lines.push('Вывод: для «своего YouTube-фронтенда» браузер подходит (до 1080p' + ((ok4kVp9 || ok4kAv1) ? ', 4K возможен' : '') + '). Это НЕ доказывает, что Invidious получит ролики YouTube.');
+      else lines.push('Вывод: свой фронтенд в этом браузере проблематичен. Лучше приставка/Android TV.');
+    }
+    var v = $('verdict'); v.style.display = 'block'; v.innerHTML = lines.map(esc).join('<br>');
+    var rep = [];
+    rep.push('VIDAA-TEST ' + new Date().toISOString().replace('T', ' ').slice(0, 16) + 'Z');
+    rep.push('SCREEN ' + screen.width + 'x' + screen.height + ' DPR' + (window.devicePixelRatio || 1) + ' MSE ' + (hasMse ? 'yes' : 'no'));
+    results.forEach(function (r) { if (r.group !== 'Система') rep.push(r.status + ' | ' + r.name + ' | ' + r.detail); });
+    $('report').textContent = rep.join('\n');
+    showReport(true);
+  }
+  function showReport(on) {
+    $('report').style.display = on ? 'block' : 'none';
+    $('tbl').style.display = on ? 'none' : 'table';
+    if (on) window.scrollTo(0, 0);
+  }
+
+  // ---------- menu wiring ----------
+  $('bCaps').onclick = guard(function (d) { setStatus('Проверка API…'); runCaps(d); });
+  $('bPlay').onclick = guard(function (d) { runList(CLIPS, playClip, d); });
+  $('bMse').onclick = guard(function (d) { runList(MSE_CASES, mseClip, d); });
+  $('bAudio').onclick = guard(function (d) { runAudio(d); });
+  $('bFs').onclick = guard(function (d) { runFs(d); });
+  $('bSum').onclick = function () { if (!running) summary(); };
+  $('bTbl').onclick = function () { if (!running) showReport($('report').style.display !== 'block'); };
+  $('bAll').onclick = guard(function (d) {
+    runCaps(function () {
+      runList(CLIPS, playClip, function () {
+        runList(MSE_CASES, mseClip, function () {
+          runAudio(function () { runFs(function () { summary(); d(); }); });
+        });
+      });
+    });
+  });
+
+  // ---------- remote control (arrows / OK / Back) ----------
+  function focusables() {
+    var scope = $('modal').style.display === 'flex' ? $('modal') : document;
+    var all = scope.querySelectorAll('button'), out = [];
+    for (var i = 0; i < all.length; i++) if (!all[i].disabled && all[i].offsetWidth) out.push(all[i]);
+    return out;
+  }
+  function focusFirst() { var f = focusables(); if (f.length) f[0].focus(); }
+  function move(dx, dy) {
+    var f = focusables(), cur = document.activeElement;
+    if (f.indexOf(cur) < 0) { if (f.length) f[0].focus(); return; }
+    var r = cur.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2, best = null, bd = 1e9;
+    for (var i = 0; i < f.length; i++) {
+      if (f[i] === cur) continue;
+      var b = f[i].getBoundingClientRect(), x = b.left + b.width / 2 - cx, y = b.top + b.height / 2 - cy;
+      var prim = dx ? x * dx : y * dy, sec = dx ? Math.abs(y) : Math.abs(x);
+      if (prim <= 5) continue;
+      var d = prim + 2.5 * sec;
+      if (d < bd) { bd = d; best = f[i]; }
+    }
+    if (best) best.focus(); else if (dy) window.scrollBy(0, dy * 260);
+  }
+  document.addEventListener('keydown', function (e) {
+    var k = e.keyCode;
+    if (k === 37) { move(-1, 0); e.preventDefault(); }
+    else if (k === 39) { move(1, 0); e.preventDefault(); }
+    else if (k === 38) { move(0, -1); e.preventDefault(); }
+    else if (k === 40) { move(0, 1); e.preventDefault(); }
+    else if (k === 8 || k === 27 || k === 461 || k === 10009) {
+      e.preventDefault();
+      if (modalCb) answer(null);
+      else if (running) { cancel = true; setStatus('Остановка после текущего теста…'); }
+    }
+  });
+
+  window.addEventListener('error', function (e) { put('Система', 'JS-ошибка', 'FAIL', (e.message || '') + ' @' + (e.lineno || '?')); });
+  sysInfo();
+  focusFirst();
+  document.addEventListener('click', function () {}, false);
+}());
+</script>
+</body>
+</html>
